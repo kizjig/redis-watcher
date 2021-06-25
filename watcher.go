@@ -209,6 +209,19 @@ func (w *Watcher) subscribe() {
 			default:
 			}
 			data := msg.Payload
+
+			// Should we ignore messages from ourself?
+			if w.options.IgnoreSelf && data != "" {
+				msgStruct := &MSG{}
+				err := msgStruct.UnmarshalBinary([]byte(data))
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+				if msgStruct.ID == w.options.LocalID {
+					continue
+				}
+			}
 			w.callback(data)
 		}
 	}()
