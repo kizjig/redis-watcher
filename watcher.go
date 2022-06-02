@@ -51,7 +51,7 @@ func (m *MSG) UnmarshalBinary(data []byte) error {
 // 		Example:
 // 				w, err := rediswatcher.NewWatcher("127.0.0.1:6379",WatcherOptions{}, nil)
 //
-func NewWatcher(addr string, option WatcherOptions) (persist.Watcher, error) {
+func NewWatcher(addr string, option WatcherOptions, optionalUpdateCallback func(string)) (persist.Watcher, error) {
 	option.Addr = addr
 	w := &Watcher{
 		subClient: rds.NewClient(&option.Options),
@@ -61,8 +61,8 @@ func NewWatcher(addr string, option WatcherOptions) (persist.Watcher, error) {
 	}
 
 	var err error
-	if option.OptionalUpdateCallback != nil {
-		err = w.SetUpdateCallback(option.OptionalUpdateCallback)
+	if optionalUpdateCallback != nil {
+		err = w.SetUpdateCallback(optionalUpdateCallback)
 	} else {
 		err = w.SetUpdateCallback(func(string) {
 			log.Println("Casbin Redis Watcher callback not set when an update was received")
