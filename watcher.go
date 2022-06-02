@@ -49,9 +49,9 @@ func (m *MSG) UnmarshalBinary(data []byte) error {
 // setters allows for inline WatcherOptions
 //
 // 		Example:
-// 				w, err := rediswatcher.NewWatcher("127.0.0.1:6379",WatcherOptions{}, nil)
+// 				w, err := rediswatcher.NewWatcher("127.0.0.1:6379",WatcherOptions{})
 //
-func NewWatcher(addr string, option WatcherOptions, optionalUpdateCallback func(string)) (persist.Watcher, error) {
+func NewWatcher(addr string, option WatcherOptions) (persist.Watcher, error) {
 	option.Addr = addr
 	w := &Watcher{
 		subClient: rds.NewClient(&option.Options),
@@ -60,22 +60,10 @@ func NewWatcher(addr string, option WatcherOptions, optionalUpdateCallback func(
 		close:     make(chan struct{}),
 	}
 
-	var err error
-	if optionalUpdateCallback != nil {
-		err = w.SetUpdateCallback(optionalUpdateCallback)
-	} else {
-		err = w.SetUpdateCallback(func(string) {
-			log.Println("Casbin Redis Watcher callback not set when an update was received")
-		})
-	}
-	if err != nil {
+	if err := w.subClient.Ping(w.ctx).Err(); err != nil {
 		return nil, err
 	}
-
-	if err = w.subClient.Ping(w.ctx).Err(); err != nil {
-		return nil, err
-	}
-	if err = w.pubClient.Ping(w.ctx).Err(); err != nil {
+	if err := w.pubClient.Ping(w.ctx).Err(); err != nil {
 		return nil, err
 	}
 
