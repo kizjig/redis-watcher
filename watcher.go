@@ -49,16 +49,19 @@ func (m *MSG) UnmarshalBinary(data []byte) error {
 // setters allows for inline WatcherOptions
 //
 // 		Example:
-// 				w, err := rediswatcher.NewWatcher("127.0.0.1:6379",WatcherOptions{})
+// 				w, err := rediswatcher.NewWatcher("127.0.0.1:6379",WatcherOptions{}, nil)
 //
 func NewWatcher(addr string, option WatcherOptions) (persist.Watcher, error) {
 	option.Addr = addr
+	initConfig(&option)
 	w := &Watcher{
 		subClient: rds.NewClient(&option.Options),
 		pubClient: rds.NewClient(&option.Options),
 		ctx:       context.Background(),
 		close:     make(chan struct{}),
 	}
+
+	w.initConfig(option)
 
 	if err := w.subClient.Ping(w.ctx).Err(); err != nil {
 		return nil, err
@@ -67,12 +70,38 @@ func NewWatcher(addr string, option WatcherOptions) (persist.Watcher, error) {
 		return nil, err
 	}
 
-	initConfig(&option)
 	w.options = option
 
 	w.subscribe()
 
 	return w, nil
+}
+
+func (w *Watcher) initConfig(option WatcherOptions) error {
+	var err error
+	if option.OptionalUpdateCallback != nil {
+		err = w.SetUpdateCallback(option.OptionalUpdateCallback)
+	} else {
+		err = w.SetUpdateCallback(func(string) {
+			log.Println("Casbin Redis Watcher callback not set when an update was received")
+		})
+	}
+	if err != nil {
+		return err
+	}
+
+	if option.SubClient != nil {
+		w.subClient = option.SubClient
+	} else {
+		w.subClient = rds.NewClient(&option.Options)
+	}
+
+	if option.PubClient != nil {
+		w.pubClient = option.PubClient
+	} else {
+		w.pubClient = rds.NewClient(&option.Options)
+	}
+	return nil
 }
 
 // NewPublishWatcher return a Watcher only publish but not subscribe
@@ -119,7 +148,7 @@ func (w *Watcher) UpdateForAddPolicy(sec, ptype string, params ...string) error 
 	})
 }
 
-// UpdateForRemovePolicy UPdateForRemovePolicy calls the update callback of other instances to synchronize their policy.
+// UpdateForRemovePolicy calls the update callback of other instances to synchronize their policy.
 // It is called after Enforcer.RemovePolicy()
 func (w *Watcher) UpdateForRemovePolicy(sec, ptype string, params ...string) error {
 	return w.logRecord(func() error {
@@ -152,6 +181,26 @@ func (w *Watcher) UpdateForSavePolicy(model model.Model) error {
 		w.l.Lock()
 		defer w.l.Unlock()
 		return w.pubClient.Publish(context.Background(), w.options.Channel, &MSG{"UpdateForSavePolicy", w.options.LocalID, "", "", model}).Err()
+	})
+}
+
+// UpdateForAddPolicies calls the update callback of other instances to synchronize their policies in batch.
+// It is called after Enforcer.AddPolicies()
+func (w *Watcher) UpdateForAddPolicies(sec string, ptype string, rules ...[]string) error {
+	return w.logRecord(func() error {
+		w.l.Lock()
+		defer w.l.Unlock()
+		return w.pubClient.Publish(context.Background(), w.options.Channel, &MSG{"UpdateForAddPolicies", w.options.LocalID, sec, ptype, rules}).Err()
+	})
+}
+
+// UpdateForRemovePolicies calls the update callback of other instances to synchronize their policies in batch.
+// It is called after Enforcer.RemovePolicies()
+func (w *Watcher) UpdateForRemovePolicies(sec string, ptype string, rules ...[]string) error {
+	return w.logRecord(func() error {
+		w.l.Lock()
+		defer w.l.Unlock()
+		return w.pubClient.Publish(context.Background(), w.options.Channel, &MSG{"UpdateForRemovePolicies", w.options.LocalID, sec, ptype, rules}).Err()
 	})
 }
 
@@ -197,7 +246,16 @@ func (w *Watcher) subscribe() {
 			default:
 			}
 			data := msg.Payload
-			w.callback(data)
+			msgStruct := &MSG{}
+			err := msgStruct.UnmarshalBinary([]byte(data))
+			if err != nil {
+				log.Println(fmt.Printf("Failed to parse message: %s with error: %s\n", data, err.Error()))
+			} else {
+				isSelf := msgStruct.ID == w.options.LocalID
+				if !(w.options.IgnoreSelf && isSelf) {
+					w.callback(data)
+				}
+			}
 		}
 	}()
 	wg.Wait()
